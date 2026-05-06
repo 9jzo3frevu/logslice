@@ -1,64 +1,74 @@
-// Package pipeline wires together filtering, transformation, and fanout
-// into a single processing step for incoming log entries.
+// Package pipeline wires together filter, transform, and sink components
+// into a single http.Handler that processes incoming log entries end-to-end.
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 
-	"github.com/yourorg/logslice/internal/filter"
-	"github.com/yourorg/logslice/internal/metrics"
-	"github.com/yourorg/logslice/internal/sink"
-	"github.com/yourorg/logslice/internal/transform"
+	"github.com/logslice/logslice/internal/config"
+	"github.com/logslice/logslice/internal/filter"
+	"github.com/logslice/logslice/internal/schema"
+	"github.com/logslice/logslice/internal/sink"
 )
 
-// Processor applies filter, transform, and fanout to a log entry.
-type Processor struct {
-	filter    *filter.Filter
-	transform *transform.Transform
-	fanout    *sink.Fanout
+// Pipeline holds the assembled components for log processing.
+type Pipeline struct {
+	filter *filter.Filter
+	fanout *sink.Fanout
 }
 
-// Config holds the dependencies needed to build a Processor.
-type Config struct {
-	Filter    *filter.Filter
-	Transform *transform.Transform
-	Fanout    *sink.Fanout
-}
+// New constructs a Pipeline from the provided configuration.
+// It returns an error if any sink or filter cannot be initialised.
+func New(cfg *config.Config) (*Pipeline, error) {
+	f, err := filter.New(cfg.Filter.MinLevel, cfg.Filter.Tags)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: filter: %w", err)
+	}
 
-// New creates a Processor from the provided Config.
-// All fields in Config are required.
-func New(cfg Config) (*Processor, error) {
-	if cfg.Filter == nil {
-		return nil, fmt.Errorf("pipeline: filter is required")
+	sinks := make([]*sink.Sink, 0, len(cfg.Sinks))
+	for _, sc := range cfg.Sinks {
+		s, err := sink.New(sc.Name, sc.URL)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: sink %q: %w", sc.Name, err)
+		}
+		sinks = append(sinks, s)
 	}
-	if cfg.Transform == nil {
-		return nil, fmt.Errorf("pipeline: transform is required")
-	}
-	if cfg.Fanout == nil {
-		return nil, fmt.Errorf("pipeline: fanout is required")
-	}
-	return &Processor{
-		filter:    cfg.Filter,
-		transform: cfg.Transform,
-		fanout:    cfg.Fanout,
+
+	return &Pipeline{
+		filter: f,
+		fanout: sink.NewFanout(sinks),
 	}, nil
 }
 
-// Process filters, transforms, and forwards a single log entry.
-// It returns true if the entry was forwarded, false if it was filtered out.
-// Any forwarding errors are recorded in metrics but not returned.
-func (p *Processor) Process(entry map[string]any) bool {
+// ServeHTTP implements http.Handler so the pipeline can be mounted directly
+// onto a router. It decodes, validates, filters, and forwards each entry.
+func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var entry map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := schema.Validate(entry); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	entry = schema.Normalize(entry)
+
 	if !p.filter.Allow(entry) {
-		metrics.Global.Filtered.Add(1)
-		return false
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	p.filter.Tag(entry)
-	entry = p.transform.Apply(entry)
 
-	if err := p.fanout.Send(entry); err != nil {
-		metrics.Global.Errors.Add(1)
+	if err := p.fanout.Send(r.Context(), entry); err != nil {
+		http.Error(w, "failed to forward log", http.StatusBadGateway)
+		return
 	}
-	metrics.Global.Forwarded.Add(1)
-	return true
+
+	w.WriteHeader(http.StatusAccepted)
 }
