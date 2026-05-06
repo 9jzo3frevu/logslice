@@ -32,19 +32,29 @@ func (c *Checker) SetReady(ready bool) {
 	c.ready.Store(ready)
 }
 
+// writeJSON encodes v as JSON into w with the given HTTP status code.
+func (c *Checker) writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// newStatus constructs a Status with the current UTC timestamp and checker version.
+func (c *Checker) newStatus(ok bool) Status {
+	return Status{
+		OK:        ok,
+		Timestamp: time.Now().UTC(),
+		Version:   c.version,
+	}
+}
+
 // LivenessHandler always returns 200 OK as long as the process is running.
 func (c *Checker) LivenessHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(Status{
-		OK:        true,
-		Timestamp: time.Now().UTC(),
-		Version:   c.version,
-	})
+	c.writeJSON(w, http.StatusOK, c.newStatus(true))
 }
 
 // ReadinessHandler returns 200 when ready, 503 otherwise.
@@ -53,20 +63,9 @@ func (c *Checker) ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	if !c.ready.Load() {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(Status{
-			OK:        false,
-			Timestamp: time.Now().UTC(),
-			Version:   c.version,
-		})
+		c.writeJSON(w, http.StatusServiceUnavailable, c.newStatus(false))
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(Status{
-		OK:        true,
-		Timestamp: time.Now().UTC(),
-		Version:   c.version,
-	})
+	c.writeJSON(w, http.StatusOK, c.newStatus(true))
 }
