@@ -85,6 +85,18 @@ func TestMatch_NoRules(t *testing.T) {
 	}
 }
 
+func TestMatch_MissingField(t *testing.T) {
+	r, _ := routing.New([]routing.Rule{
+		{Field: "level", Value: "error", Sinks: []string{"critical"}},
+	}, []string{"default"})
+
+	// A log entry that does not contain the rule's field should fall back to default.
+	got := r.Match(map[string]string{"service": "api"})
+	if len(got) != 1 || got[0] != "default" {
+		t.Fatalf("expected [default], got %v", got)
+	}
+}
+
 func TestDefaultSinks(t *testing.T) {
 	r, _ := routing.New(nil, []string{"a", "b"})
 	ds := r.DefaultSinks()
