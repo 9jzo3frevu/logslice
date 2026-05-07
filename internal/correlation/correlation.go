@@ -1,63 +1,62 @@
-// Package correlation provides request correlation ID injection and propagation
-// for structured log entries passing through the proxy pipeline.
+// Package correlation provides request correlation ID injection and propagation.
 package correlation
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"net/http"
+	"fmt"
 )
 
-const (
-	// HeaderName is the HTTP header used to carry the correlation ID.
-	HeaderName = "X-Correlation-ID"
+// contextKey is an unexported type for context keys in this package.
+type contextKey struct{}
 
-	// FieldName is the JSON field injected into log entries.
-	FieldName = "correlation_id"
-)
+// DefaultHeader is the HTTP header used to carry the correlation ID.
+const DefaultHeader = "X-Correlation-ID"
 
-// Generator produces correlation IDs.
-type Generator interface {
-	Generate() string
+// Correlator generates and attaches correlation IDs to log entries.
+type Correlator struct {
+	header string
 }
 
-// DefaultGenerator produces 16-byte random hex correlation IDs.
-type DefaultGenerator struct{}
+// New returns a Correlator that reads/writes the given header name.
+// If header is empty, DefaultHeader is used.
+func New(header string) (*Correlator, error) {
+	if header == "" {
+		header = DefaultHeader
+	}
+	return &Correlator{header: header}, nil
+}
 
-// Generate returns a new random correlation ID.
-func (g *DefaultGenerator) Generate() string {
-	b := make([]byte, 16)
+// Header returns the configured header name.
+func (c *Correlator) Header() string {
+	return c.header
+}
+
+// Generate creates a new random correlation ID.
+func Generate() (string, error) {
+	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return "unknown"
+		return "", fmt.Errorf("correlation: generate id: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
-// Injector reads or generates a correlation ID from an HTTP request,
-// then injects it into a log entry map.
-type Injector struct {
-	gen Generator
+// FromContext retrieves the correlation ID stored in ctx, or empty string.
+func FromContext(ctx context.Context) string {
+	v, _ := ctx.Value(contextKey{}).(string)
+	return v
 }
 
-// New creates an Injector with the given Generator. If gen is nil,
-// DefaultGenerator is used.
-func New(gen Generator) *Injector {
-	if gen == nil {
-		gen = &DefaultGenerator{}
+// WithContext returns a new context carrying the given correlation ID.
+func WithContext(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, contextKey{}, id)
+}
+
+// Inject adds the correlation ID to the provided log entry map.
+// If the entry already contains the field, it is not overwritten.
+func (c *Correlator) Inject(entry map[string]interface{}, id string) {
+	if _, exists := entry["correlation_id"]; !exists {
+		entry["correlation_id"] = id
 	}
-	return &Injector{gen: gen}
-}
-
-// FromRequest returns the correlation ID from the request header,
-// generating one if the header is absent.
-func (inj *Injector) FromRequest(r *http.Request) string {
-	if id := r.Header.Get(HeaderName); id != "" {
-		return id
-	}
-	return inj.gen.Generate()
-}
-
-// Inject sets the correlation ID field on the log entry map.
-func (inj *Injector) Inject(entry map[string]interface{}, id string) {
-	entry[FieldName] = id
 }
