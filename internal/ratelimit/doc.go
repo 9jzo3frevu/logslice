@@ -1,19 +1,5 @@
-// Package ratelimit provides token-bucket rate limiting for logslice.
-//
-// It exposes three main constructs:
-//
-//   - Limiter: a single token-bucket rate limiter wrapping golang.org/x/time/rate.
-//   - KeyedLimiter: manages independent per-key Limiters with automatic TTL-based
-//     eviction, suitable for per-IP or per-tenant rate limiting.
-//   - Middleware / KeyedMiddleware: http.Handler wrappers that enforce limits and
-//     return HTTP 429 when a request exceeds its allowance.
-//
-// Example — global limit:
-//
-//	l := ratelimit.New(100, 10)
-//	http.Handle("/ingest", ratelimit.Middleware(l, next))
-//
-// Example — per-IP limit:
-//
-//	http.Handle("/ingest", ratelimit.KeyedMiddleware(50, 5, 5*time.Minute, next))
+// Package ratelimit provides token-bucket rate limiting for incoming log
+// entries, both globally and per-client IP. It exposes standard
+// http.Handler middleware as well as a keyed limiter backed by an LRU-style
+// eviction store.
 package ratelimit
