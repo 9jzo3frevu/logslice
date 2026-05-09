@@ -34,6 +34,18 @@ func (e *Encoder) Encode(entry *LogEntry) error {
 	return nil
 }
 
+// EncodeMany validates, normalises, and writes each entry in entries as a
+// separate JSON line. It stops and returns an error on the first failure,
+// reporting the index of the offending entry.
+func (e *Encoder) EncodeMany(entries []*LogEntry) error {
+	for i, entry := range entries {
+		if err := e.Encode(entry); err != nil {
+			return fmt.Errorf("encoder: entry %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // EncodeToBytes validates, normalises, and serialises entry to a byte slice
 // without a trailing newline. Useful when the caller needs a []byte payload.
 func EncodeToBytes(entry *LogEntry) ([]byte, error) {
