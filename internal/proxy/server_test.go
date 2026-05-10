@@ -13,23 +13,28 @@ import (
 	"github.com/yourorg/logslice/internal/sink"
 )
 
+// newTestHandler is a helper that creates a proxy.Handler backed by a test sink
+// pointed at the given upstream URL and a filter for the specified log level.
+func newTestHandler(t *testing.T, level, upstreamURL string) *proxy.Handler {
+	t.Helper()
+	f, err := filter.New(level)
+	if err != nil {
+		t.Fatalf("filter.New(%q): %v", level, err)
+	}
+	s, err := sink.New("test", upstreamURL)
+	if err != nil {
+		t.Fatalf("sink.New: %v", err)
+	}
+	return proxy.NewHandler(f, sink.NewFanout([]*sink.Sink{s}))
+}
+
 func TestServer_StartShutdown(t *testing.T) {
 	sinkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer sinkServer.Close()
 
-	f, err := filter.New("info")
-	if err != nil {
-		t.Fatalf("filter.New: %v", err)
-	}
-	s, err := sink.New("test", sinkServer.URL)
-	if err != nil {
-		t.Fatalf("sink.New: %v", err)
-	}
-	fo := sink.NewFanout([]*sink.Sink{s})
-	h := proxy.NewHandler(f, fo)
-
+	h := newTestHandler(t, "info", sinkServer.URL)
 	srv := proxy.NewServer("127.0.0.1:0", h)
 
 	errCh := make(chan error, 1)
@@ -60,10 +65,7 @@ func TestServer_RouteNotFound(t *testing.T) {
 	}))
 	defer sinkServer.Close()
 
-	f, _ := filter.New("info")
-	s, _ := sink.New("t", sinkServer.URL)
-	fo := sink.NewFanout([]*sink.Sink{s})
-	h := proxy.NewHandler(f, fo)
+	h := newTestHandler(t, "info", sinkServer.URL)
 
 	srv := proxy.NewServer("127.0.0.1:19876", h)
 	go srv.Start() //nolint:errcheck
